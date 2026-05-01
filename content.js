@@ -239,6 +239,27 @@
     return getDisplayedVACompensation() / BLEND_VA_GROSSUP_FACTOR;
   }
 
+  function detectMilitaryEntitlements() {
+    let total = 0;
+    const inputs = document.querySelectorAll('input[name="militaryEntitlements.amount"]');
+    for (const inp of inputs) {
+      const amount = parseMoney(inp.value);
+      if (!amount) continue;
+      const row = inp.closest('tr');
+      let freq = 'Monthly';
+      if (row) {
+        const sel = row.querySelector('select[name="militaryEntitlements.frequency"]');
+        if (sel && sel.value) freq = sel.value;
+      }
+      total += /annual/i.test(freq) ? amount / 12 : amount;
+    }
+    return total;
+  }
+
+  function detectNonTaxableIncome() {
+    return detectVACompensation() + detectMilitaryEntitlements();
+  }
+
   function getOtherIncomeTotal() {
     let total = 0;
     for (const row of readOtherIncomeRows()) {
@@ -273,7 +294,7 @@
 
   function readPageInputs() {
     const grossIncome = getGrossMonthlyIncome();
-    const vaComp = detectVACompensation();
+    const nonTaxableIncome = detectNonTaxableIncome();
     const monthlyDebts = getMonthlyDebts();
     const piti = getProposedPITI();
     const married = /^(married|separated)$/.test(getMaritalStatus());
@@ -283,7 +304,7 @@
     const loanAmount = getLoanAmount();
     return {
       grossIncome,
-      vaCompensation: vaComp,
+      nonTaxableIncome,
       monthlyDebts,
       piti,
       maintenance: MAINT_PER_SQFT * DEFAULT_SQFT,
@@ -297,7 +318,7 @@
 
   function calculate(state) {
     const gross = state.grossIncome || 0;
-    const taxableIncome = Math.max(0, gross - (state.vaCompensation || 0));
+    const taxableIncome = Math.max(0, gross - (state.nonTaxableIncome || 0));
     const fedTax = taxableIncome * FED_TAX_RATE;
     const fica = taxableIncome * FICA_RATE;
     const stateTax = taxableIncome * STATE_TAX_RATE;
@@ -458,8 +479,8 @@
       title.textContent = 'Residual income: ' + fmt(result.residualIncome);
 
       addRow('Gross monthly income', fmt(state.grossIncome));
-      addEditableRow('VA Compensation (non-taxable)', state.vaCompensation, 'Excluded from taxes', function (v) {
-        state.vaCompensation = v;
+      addEditableRow('Non-Taxable Income (VA Disability, BAH, BAS, etc.)', state.nonTaxableIncome, 'Excluded from taxes', function (v) {
+        state.nonTaxableIncome = v;
       });
       addRow('Taxable income', fmt(result.taxableIncome), { divider: true });
       addRow('− Federal tax (15%)', '−' + fmt(result.federalTax));
