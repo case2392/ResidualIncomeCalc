@@ -56,7 +56,7 @@
   }
 
   function normalizeText(s) {
-    return (s || '').replace(/\s+/g, ' ').replace(/\*/g, '').trim().toLowerCase();
+    return (s || '').replace(/\s+/g, ' ').replace(/[*.]/g, '').trim().toLowerCase();
   }
 
   function findLabel(text, scope) {
@@ -164,9 +164,11 @@
 
   function getPanelNumber(label) {
     const target = normalizeText(label);
-    const els = document.querySelectorAll('div, span, td, p, dt, li');
+    const els = document.querySelectorAll('div, span, td, th, p, dt, dd, li, label');
     for (const el of els) {
-      if (normalizeText(el.textContent) === target) {
+      const t = normalizeText(el.textContent);
+      if (!t) continue;
+      if (t === target) {
         let sib = el.nextElementSibling;
         while (sib && !sib.textContent.trim()) sib = sib.nextElementSibling;
         if (sib) {
@@ -179,6 +181,17 @@
           const n = parseMoney(txt);
           if (n) return n;
         }
+      }
+    }
+    for (const el of els) {
+      const raw = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!raw) continue;
+      const t = normalizeText(raw);
+      if (t === target) continue;
+      if (t.startsWith(target) && raw.length < label.length + 40) {
+        const rest = raw.slice(raw.toLowerCase().indexOf(target) + target.length);
+        const n = parseMoney(rest);
+        if (n) return n;
       }
     }
     return 0;
@@ -201,6 +214,8 @@
   function getLoanAmount() {
     return getPanelNumber('Total loan amt')
       || getPanelNumber('Base loan amt')
+      || getPanelNumber('Total loan amount')
+      || getPanelNumber('Base loan amount')
       || getPanelNumber('Loan amount')
       || getPanelNumber('Loan amt')
       || 0;
@@ -235,7 +250,7 @@
 
   function readPageInputs() {
     const grossIncome = getGrossMonthlyIncome();
-    const vaComp = detectVACompensation();
+    const vaComp = 0;
     const monthlyDebts = getMonthlyDebts();
     const piti = getProposedPITI();
     const married = /^(married|separated)$/.test(getMaritalStatus());
