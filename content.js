@@ -2,6 +2,7 @@
   'use strict';
 
   const BUTTON_ID = 'rric-run-button';
+  const PANEL_ID = 'rric-panel';
   const TRIGGER_VETERAN_TYPES = ['Regular military', 'National Guard or reserves'];
 
   const FED_TAX_RATE = 0.15;
@@ -9,12 +10,26 @@
   const STATE_TAX_RATE = 0.02;
   const MAINT_PER_SQFT = 0.14;
   const DEFAULT_SQFT = 2500;
+  const NON_TAXABLE_GROSS_UP_RATE = 0.25;
 
   const VA_REGION_BY_STATE = {
     Northeast: ['CT', 'ME', 'MA', 'NH', 'NJ', 'NY', 'PA', 'RI', 'VT'],
-    Midwest: ['IL', 'IN', 'IA', 'KS', 'MI', 'MN', 'MO', 'NE', 'ND', 'OH', 'SD', 'WI'],
-    South: ['AL', 'AR', 'DE', 'DC', 'FL', 'GA', 'KY', 'LA', 'MD', 'MS', 'NC', 'OK', 'SC', 'TN', 'TX', 'VA', 'WV', 'PR'],
-    West: ['AK', 'AZ', 'CA', 'CO', 'HI', 'ID', 'MT', 'NV', 'NM', 'OR', 'UT', 'WA', 'WY', 'GU']
+    Midwest:   ['IL', 'IN', 'IA', 'KS', 'MI', 'MN', 'MO', 'NE', 'ND', 'OH', 'SD', 'WI'],
+    South:     ['AL', 'AR', 'DE', 'DC', 'FL', 'GA', 'KY', 'LA', 'MD', 'MS', 'NC', 'OK', 'SC', 'TN', 'TX', 'VA', 'WV', 'PR'],
+    West:      ['AK', 'AZ', 'CA', 'CO', 'HI', 'ID', 'MT', 'NV', 'NM', 'OR', 'UT', 'WA', 'WY', 'GU']
+  };
+
+  const VA_TABLE_GT_80K = {
+    Northeast: { 1: 450, 2: 755, 3: 909, 4: 1025, 5: 1062 },
+    Midwest:   { 1: 441, 2: 738, 3: 889, 4: 1003, 5: 1039 },
+    South:     { 1: 441, 2: 738, 3: 889, 4: 1003, 5: 1039 },
+    West:      { 1: 491, 2: 823, 3: 990, 4: 1117, 5: 1158 }
+  };
+  const VA_TABLE_LE_80K = {
+    Northeast: { 1: 390, 2: 654, 3: 788, 4: 888,  5: 921 },
+    Midwest:   { 1: 382, 2: 641, 3: 772, 4: 868,  5: 902 },
+    South:     { 1: 382, 2: 641, 3: 772, 4: 868,  5: 902 },
+    West:      { 1: 425, 2: 713, 3: 859, 4: 967,  5: 1004 }
   };
 
   function regionFor(stateCode) {
@@ -23,6 +38,15 @@
       if (list.includes(code)) return region;
     }
     return null;
+  }
+
+  function vaTableRequirement(familySize, region, loanAmount) {
+    if (!region || !familySize || !loanAmount) return null;
+    const table = loanAmount > 80000 ? VA_TABLE_GT_80K : VA_TABLE_LE_80K;
+    const r = table[region];
+    if (!r) return null;
+    if (familySize <= 5) return r[Math.max(1, Math.min(familySize, 5))];
+    return r[5] + (familySize - 5) * 75;
   }
 
   function parseMoney(s) {
@@ -41,11 +65,11 @@
     const labels = root.querySelectorAll('label');
     for (const lbl of labels) {
       const t = normalizeText(lbl.textContent);
-      if (t === target || t.startsWith(target + ' ') || t === target + ' *') return lbl;
+      if (t === target || t === target + ' *') return lbl;
     }
     for (const lbl of labels) {
       const t = normalizeText(lbl.textContent);
-      if (t.startsWith(target)) return lbl;
+      if (t.startsWith(target + ' ') || t.startsWith(target)) return lbl;
     }
     return null;
   }
@@ -111,9 +135,7 @@
   function getPropertyState() {
     const scope = findSectionScope('Subject property') || findSectionScope('Property information');
     let stateInp = null;
-    if (scope) {
-      stateInp = findFieldByLabel('State', scope);
-    }
+    if (scope) stateInp = findFieldByLabel('State', scope);
     if (!stateInp) stateInp = findFieldByLabel('Property state');
     if (stateInp) {
       const v = getSelectText(stateInp).trim();
@@ -169,168 +191,277 @@
   }
 
   function getMonthlyDebts() {
-    const v = getPanelNumber('Monthly liabilities');
-    if (v) return v;
-    return getPanelNumber('Monthly debts');
+    return getPanelNumber('Monthly liabilities') || getPanelNumber('Monthly debts');
   }
 
   function getProposedPITI() {
     return getPanelNumber('Monthly PITI') || getPanelNumber('PITI');
   }
 
-  function calculate() {
+  function getLoanAmount() {
+    return getPanelNumber('Total loan amt')
+      || getPanelNumber('Base loan amt')
+      || getPanelNumber('Loan amount')
+      || getPanelNumber('Loan amt')
+      || 0;
+  }
+
+  function detectVACompensation() {
+    let total = 0;
+    const seen = new WeakSet();
+    const re = /(va\s+(compensation|disability)|service[\s-]connected|disability\s+(income|compensation|pension))/;
+    const elements = document.querySelectorAll('label, span, div, td, option');
+    for (const el of elements) {
+      const t = normalizeText(el.textContent);
+      if (!t || !re.test(t)) continue;
+      let row;
+      if (el.tagName === 'OPTION') {
+        if (!el.selected) continue;
+        const select = el.parentElement;
+        if (!select) continue;
+        row = select.closest('tr, li, div, section');
+      } else {
+        row = el.closest('tr, li') || el.parentElement;
+      }
+      if (!row || seen.has(row)) continue;
+      seen.add(row);
+      for (const inp of row.querySelectorAll('input')) {
+        const v = parseMoney(inp.value);
+        if (v > 0) { total += v; break; }
+      }
+    }
+    return total;
+  }
+
+  function readPageInputs() {
     const grossIncome = getGrossMonthlyIncome();
+    const vaComp = detectVACompensation();
     const monthlyDebts = getMonthlyDebts();
     const piti = getProposedPITI();
-    const fedTax = grossIncome * FED_TAX_RATE;
-    const fica = grossIncome * FICA_RATE;
-    const stateTax = grossIncome * STATE_TAX_RATE;
-    const maintenance = MAINT_PER_SQFT * DEFAULT_SQFT;
-
-    const residual = grossIncome - fedTax - fica - stateTax - monthlyDebts - piti - maintenance;
-
-    const maritalStatus = getMaritalStatus();
-    const married = /^(married|separated)$/.test(maritalStatus);
+    const married = /^(married|separated)$/.test(getMaritalStatus());
     const familySize = 1 + (married ? 1 : 0) + getDependentCount();
     const state = getPropertyState();
     const region = regionFor(state);
-
+    const loanAmount = getLoanAmount();
     return {
-      inputs: {
-        grossIncome,
-        monthlyDebts,
-        piti,
-        sqft: DEFAULT_SQFT,
-        familySize,
-        state,
-        region
-      },
-      deductions: {
-        federalTax: fedTax,
-        socialSecurityMedicare: fica,
-        stateTax,
-        monthlyDebts,
-        proposedPITI: piti,
-        maintenanceUtilities: maintenance
-      },
-      residualIncome: Math.round(residual * 100) / 100
+      grossIncome,
+      vaCompensation: vaComp,
+      monthlyDebts,
+      piti,
+      maintenance: MAINT_PER_SQFT * DEFAULT_SQFT,
+      familySize,
+      state,
+      region,
+      loanAmount
+    };
+  }
+
+  function calculate(state) {
+    const grossUp = NON_TAXABLE_GROSS_UP_RATE * (state.vaCompensation || 0);
+    const taxableIncome = Math.max(0, (state.grossIncome || 0) - (state.vaCompensation || 0) + grossUp);
+    const totalForResidual = (state.grossIncome || 0) + grossUp;
+    const fedTax = taxableIncome * FED_TAX_RATE;
+    const fica = taxableIncome * FICA_RATE;
+    const stateTax = taxableIncome * STATE_TAX_RATE;
+    const residual = totalForResidual
+      - fedTax - fica - stateTax
+      - (state.monthlyDebts || 0)
+      - (state.piti || 0)
+      - (state.maintenance || 0);
+    const requirement = vaTableRequirement(state.familySize, state.region, state.loanAmount);
+    return {
+      grossUp,
+      taxableIncome,
+      totalForResidual,
+      federalTax: fedTax,
+      fica,
+      stateTax,
+      residualIncome: Math.round(residual * 100) / 100,
+      requirement
     };
   }
 
   function setReactInputValue(input, value) {
     const proto = Object.getPrototypeOf(input);
     const desc = Object.getOwnPropertyDescriptor(proto, 'value');
-    if (desc && desc.set) {
-      desc.set.call(input, value);
-    } else {
-      input.value = value;
-    }
+    if (desc && desc.set) desc.set.call(input, value);
+    else input.value = value;
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
     input.dispatchEvent(new Event('blur', { bubbles: true }));
   }
 
-  function showResultPanel(title, rows, opts) {
-    opts = opts || {};
-    const existing = document.querySelector('.rric-panel');
+  function fmt(n) {
+    n = (n == null || isNaN(n)) ? 0 : n;
+    return '$' + (Math.round(n * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function getPageFontFamily() {
+    const candidates = ['label', 'input', 'select', 'button', 'h2', 'h3', 'p'];
+    for (const sel of candidates) {
+      const el = document.querySelector(sel);
+      if (!el) continue;
+      const ff = getComputedStyle(el).fontFamily;
+      if (ff) return ff;
+    }
+    return getComputedStyle(document.body).fontFamily || '';
+  }
+
+  function applyResults(state, result) {
+    const residualField = findFieldByLabel('VA residual income');
+    if (residualField) setReactInputValue(residualField, result.residualIncome.toFixed(2));
+    const deductionsField = findFieldByLabel('VA total deductions');
+    if (deductionsField && result.requirement != null) {
+      setReactInputValue(deductionsField, result.requirement.toFixed(2));
+    }
+  }
+
+  function showPanel(initialState) {
+    const existing = document.getElementById(PANEL_ID);
     if (existing) existing.remove();
 
+    const state = Object.assign({}, initialState);
+    const fontFamily = getPageFontFamily();
+
     const panel = document.createElement('div');
-    panel.className = 'rric-panel' + (opts.error ? ' rric-panel-error' : '');
+    panel.id = PANEL_ID;
+    panel.className = 'rric-panel';
+    if (fontFamily) panel.style.fontFamily = fontFamily;
 
     const header = document.createElement('div');
     header.className = 'rric-panel-header';
-    const titleEl = document.createElement('div');
-    titleEl.className = 'rric-panel-title';
-    titleEl.textContent = title;
-    const closeBtn = document.createElement('button');
-    closeBtn.type = 'button';
-    closeBtn.className = 'rric-panel-close';
-    closeBtn.setAttribute('aria-label', 'Close');
-    closeBtn.textContent = '×';
-    closeBtn.addEventListener('click', function () { panel.remove(); });
-    header.appendChild(titleEl);
-    header.appendChild(closeBtn);
+    const title = document.createElement('div');
+    title.className = 'rric-panel-title';
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'rric-panel-close';
+    close.setAttribute('aria-label', 'Close');
+    close.textContent = '×';
+    close.addEventListener('click', function () { panel.remove(); });
+    header.appendChild(title);
+    header.appendChild(close);
     panel.appendChild(header);
 
     const body = document.createElement('div');
     body.className = 'rric-panel-body';
-    if (typeof rows === 'string') {
-      body.textContent = rows;
-    } else if (Array.isArray(rows)) {
-      const table = document.createElement('table');
-      table.className = 'rric-panel-table';
-      for (const row of rows) {
-        const tr = document.createElement('tr');
-        if (row.divider) {
-          tr.className = 'rric-divider';
-        }
-        if (row.emphasis) {
-          tr.className = (tr.className ? tr.className + ' ' : '') + 'rric-emphasis';
-        }
-        const th = document.createElement('td');
-        th.className = 'rric-label';
-        th.textContent = row.label || '';
-        const td = document.createElement('td');
-        td.className = 'rric-value';
-        td.textContent = row.value || '';
-        tr.appendChild(th);
-        tr.appendChild(td);
-        table.appendChild(tr);
-      }
-      body.appendChild(table);
-    }
     panel.appendChild(body);
 
-    if (opts.footer) {
-      const footer = document.createElement('div');
-      footer.className = 'rric-panel-footer';
-      footer.textContent = opts.footer;
-      panel.appendChild(footer);
-    }
+    const footer = document.createElement('div');
+    footer.className = 'rric-panel-footer';
+    const note = document.createElement('div');
+    note.className = 'rric-panel-note';
+    note.textContent = 'Edit the highlighted fields, then re-run.';
+    const rerun = document.createElement('button');
+    rerun.type = 'button';
+    rerun.className = 'rric-button rric-rerun';
+    rerun.textContent = 'Re-run';
+    footer.appendChild(note);
+    footer.appendChild(rerun);
+    panel.appendChild(footer);
 
     document.body.appendChild(panel);
-  }
 
-  function fmt(n) {
-    return '$' + (Math.round(n * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    function addRow(label, valueText, opts) {
+      opts = opts || {};
+      const row = document.createElement('div');
+      row.className = 'rric-row'
+        + (opts.divider ? ' rric-divider' : '')
+        + (opts.emphasis ? ' rric-emphasis' : '')
+        + (opts.muted ? ' rric-muted' : '');
+      const lbl = document.createElement('div');
+      lbl.className = 'rric-label';
+      lbl.textContent = label;
+      const val = document.createElement('div');
+      val.className = 'rric-value';
+      val.textContent = valueText;
+      row.appendChild(lbl);
+      row.appendChild(val);
+      body.appendChild(row);
+      return row;
+    }
+
+    function addEditableRow(label, value, suffix, onChange) {
+      const row = document.createElement('div');
+      row.className = 'rric-row rric-editable';
+      const lbl = document.createElement('div');
+      lbl.className = 'rric-label';
+      lbl.textContent = label;
+      const val = document.createElement('div');
+      val.className = 'rric-value';
+      const wrap = document.createElement('span');
+      wrap.className = 'rric-input-wrap';
+      const dollar = document.createElement('span');
+      dollar.className = 'rric-input-prefix';
+      dollar.textContent = '$';
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'rric-input';
+      input.value = (Math.round((value || 0) * 100) / 100).toFixed(2);
+      input.addEventListener('input', function () { onChange(parseMoney(input.value)); });
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); rerun.click(); }
+      });
+      wrap.appendChild(dollar);
+      wrap.appendChild(input);
+      val.appendChild(wrap);
+      if (suffix) {
+        const sfx = document.createElement('div');
+        sfx.className = 'rric-suffix';
+        sfx.textContent = suffix;
+        val.appendChild(sfx);
+      }
+      row.appendChild(lbl);
+      row.appendChild(val);
+      body.appendChild(row);
+    }
+
+    function renderBody() {
+      body.innerHTML = '';
+      const result = calculate(state);
+      title.textContent = 'Residual income: ' + fmt(result.residualIncome);
+
+      addRow('Gross monthly income', fmt(state.grossIncome));
+      addEditableRow('VA Compensation (non-taxable)', state.vaCompensation, 'Excluded from taxes; grossed up 25%', function (v) {
+        state.vaCompensation = v;
+      });
+      if (result.grossUp > 0) {
+        addRow('Gross-up @ 25% (taxable)', '+' + fmt(result.grossUp), { muted: true });
+      }
+      addRow('Taxable income', fmt(result.taxableIncome), { divider: true });
+      addRow('− Federal tax (15%)', '−' + fmt(result.federalTax));
+      addRow('− SS / Medicare (7.625%)', '−' + fmt(result.fica));
+      addRow('− State tax (2%)', '−' + fmt(result.stateTax));
+      addRow('− Monthly debts', '−' + fmt(state.monthlyDebts));
+      addRow('− Proposed PITI', '−' + fmt(state.piti));
+      addEditableRow('− Maintenance & utilities', state.maintenance, '2,500 sq ft × $0.14 default', function (v) {
+        state.maintenance = v;
+      });
+      addRow('= Residual income', fmt(result.residualIncome), { divider: true, emphasis: true });
+
+      addRow('Family size', String(state.familySize), { divider: true });
+      addRow('Property state', state.state || '—');
+      addRow('VA region', state.region || '—');
+      addRow('Loan amount', fmt(state.loanAmount));
+      addRow('VA table requirement', result.requirement != null ? fmt(result.requirement) : '—', { emphasis: true });
+
+      applyResults(state, result);
+    }
+
+    rerun.addEventListener('click', renderBody);
+    renderBody();
   }
 
   function runCalculator() {
     try {
-      const result = calculate();
-      const target = findFieldByLabel('VA residual income');
-      if (!target) {
-        showResultPanel('Calculator error', 'Could not find the "VA residual income" field on the page.', { error: true });
+      const initialState = readPageInputs();
+      if (!initialState.grossIncome) {
+        alert('Could not read gross monthly income from the Employment section or sidebar.');
         return;
       }
-      if (!result.inputs.grossIncome) {
-        showResultPanel('Calculator error', 'Could not read gross monthly income from the Employment section or the sidebar. Aborting.', { error: true });
-        return;
-      }
-      setReactInputValue(target, result.residualIncome.toFixed(2));
-
-      const rows = [
-        { label: 'Gross monthly income', value: fmt(result.inputs.grossIncome) },
-        { label: '− Federal tax (15%)', value: '−' + fmt(result.deductions.federalTax) },
-        { label: '− SS / Medicare (7.625%)', value: '−' + fmt(result.deductions.socialSecurityMedicare) },
-        { label: '− State tax (2%)', value: '−' + fmt(result.deductions.stateTax) },
-        { label: '− Monthly debts', value: '−' + fmt(result.deductions.monthlyDebts) },
-        { label: '− Proposed PITI', value: '−' + fmt(result.deductions.proposedPITI) },
-        { label: '− Maintenance & utilities', value: '−' + fmt(result.deductions.maintenanceUtilities) },
-        { label: '= Residual income', value: fmt(result.residualIncome), divider: true, emphasis: true },
-        { label: 'Family size', value: String(result.inputs.familySize), divider: true },
-        { label: 'Property state', value: result.inputs.state || '—' },
-        { label: 'VA region', value: result.inputs.region || '—' }
-      ];
-
-      showResultPanel('Residual income: ' + fmt(result.residualIncome), rows, {
-        footer: 'Maintenance & utilities = 2,500 sq ft × $0.14'
-      });
-      console.log('[Residual Income Calc]', result);
+      showPanel(initialState);
     } catch (e) {
       console.error('[Residual Income Calc] error', e);
-      showResultPanel('Calculator error', e.message, { error: true });
+      alert('Calculator error: ' + e.message);
     }
   }
 
@@ -355,16 +486,13 @@
       return normalizeText(veteranType) === normalizeText(t);
     });
     const existing = document.getElementById(BUTTON_ID);
-
     if (!shouldShow) {
       if (existing) existing.remove();
       return;
     }
     if (existing && existing.isConnected) return;
-
     const anchor = findMilitaryCompletedRow();
     if (!anchor) return;
-
     const btn = document.createElement('button');
     btn.id = BUTTON_ID;
     btn.type = 'button';
@@ -384,19 +512,13 @@
     scheduled = true;
     requestAnimationFrame(function () {
       scheduled = false;
-      try {
-        ensureButtonState();
-      } catch (e) {
-        console.error('[Residual Income Calc] observer error', e);
-      }
+      try { ensureButtonState(); } catch (e) { console.error('[Residual Income Calc] observer error', e); }
     });
   }
 
   const observer = new MutationObserver(schedule);
   observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['value'] });
-
   document.addEventListener('change', schedule, true);
   document.addEventListener('input', schedule, true);
-
   schedule();
 })();
