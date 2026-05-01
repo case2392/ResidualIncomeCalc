@@ -930,26 +930,37 @@
       }
 
       const computed = Math.round(lib.balance * calc.rate * 100) / 100;
+      try { paymentInput.focus(); } catch (_) {}
       setReactInputValue(paymentInput, computed.toFixed(2));
-      await waitMs(60);
+      await waitMs(150);
+      try { paymentInput.blur(); } catch (_) {}
+      await waitMs(150);
 
       const saveBtn = editForm.querySelector('button[data-cy="save-liability-button"]');
       if (!saveBtn) {
         skipped.push({ lib: lib, reason: 'Save button not found' });
-        await toggleLiabilityRow(lib.tr, false);
         continue;
       }
-      simulateClick(saveBtn);
+      if (typeof saveBtn.click === 'function') {
+        saveBtn.click();
+      } else {
+        simulateClick(saveBtn);
+      }
 
-      let collapsed = false;
-      for (let i = 0; i < 60; i++) {
+      let saved = false;
+      for (let i = 0; i < 200; i++) {
         await waitMs(50);
-        if (!isLiabilityRowExpanded(lib.tr)) { collapsed = true; break; }
+        if (!isLiabilityRowExpanded(lib.tr)) { saved = true; break; }
       }
-      if (!collapsed) {
-        await toggleLiabilityRow(lib.tr, false);
+      if (saved) {
+        updated.push({ lib: lib, payment: computed });
+      } else {
+        skipped.push({
+          lib: lib,
+          reason: 'Save did not complete within 10s. Value entered ' + fmt(computed) +
+                  '; row left expanded for manual review.'
+        });
       }
-      updated.push({ lib: lib, payment: computed });
     }
 
     showStudentLoanSummary({ calc: calc, detected: detected, updated: updated, skipped: skipped });
