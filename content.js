@@ -786,6 +786,52 @@
     return STUDENT_LOAN_KEYWORDS.some(function (k) { return upper.indexOf(k) !== -1; });
   }
 
+  function getLoanId() {
+    const fromUrl = (location.pathname || '').match(/(ZG\d{8,})/i);
+    if (fromUrl) return fromUrl[1].toUpperCase();
+    const fromHash = (location.hash || '').match(/(ZG\d{8,})/i);
+    if (fromHash) return fromHash[1].toUpperCase();
+    const bodyText = document.body && document.body.innerText || '';
+    const fromBody = bodyText.match(/#?(ZG\d{8,})/i);
+    if (fromBody) return fromBody[1].toUpperCase();
+    return 'unknown-' + (location.pathname || '').replace(/[^a-z0-9]/gi, '-').slice(-40);
+  }
+
+  function hasChromeStorage() {
+    return typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local;
+  }
+
+  function getOurPayments(loanId) {
+    if (!hasChromeStorage()) return Promise.resolve({});
+    return new Promise(function (resolve) {
+      try {
+        chrome.storage.local.get(['rric_ourPayments'], function (data) {
+          const all = (data && data.rric_ourPayments) || {};
+          resolve(all[loanId] || {});
+        });
+      } catch (_) { resolve({}); }
+    });
+  }
+
+  function setOurPayment(loanId, accountKey, info) {
+    if (!hasChromeStorage()) return Promise.resolve();
+    return new Promise(function (resolve) {
+      try {
+        chrome.storage.local.get(['rric_ourPayments'], function (data) {
+          const all = (data && data.rric_ourPayments) || {};
+          if (!all[loanId]) all[loanId] = {};
+          all[loanId][accountKey] = info;
+          chrome.storage.local.set({ rric_ourPayments: all }, function () { resolve(); });
+        });
+      } catch (_) { resolve(); }
+    });
+  }
+
+  function liabilityKey(lib) {
+    if (lib.accountNo) return lib.accountNo.trim();
+    return 'payee:' + (lib.payee || '').trim() + '|bal:' + (lib.balance || 0);
+  }
+
   function isLiabilityRowExpanded(summaryRow) {
     const next = summaryRow.nextElementSibling;
     return !!(next && next.querySelector('td[colspan]'));
@@ -871,6 +917,8 @@
 
   async function processStudentLoans(calc) {
     const liabilityRows = findLiabilityRows();
+    const loanId = getLoanId();
+    const ourPayments = await getOurPayments(loanId);
     const updated = [];
     const skipped = [];
     let detected = 0;
@@ -879,8 +927,11 @@
       if (!isStudentLoanByName(lib.payee)) continue;
       detected++;
 
-      if (lib.payment > 0) {
-        skipped.push({ lib: lib, reason: 'Payment already set (' + lib.paymentText + ')' });
+      const key = liabilityKey(lib);
+      const ours = ourPayments[key];
+
+      if (lib.payment > 0 && !ours) {
+        skipped.push({ lib: lib, reason: 'Payment already set (' + lib.paymentText + ') — entered manually, not overwritten' });
         continue;
       }
       if (!lib.balance || lib.balance <= 0) {
@@ -953,7 +1004,13 @@
         if (!isLiabilityRowExpanded(lib.tr)) { saved = true; break; }
       }
       if (saved) {
-        updated.push({ lib: lib, payment: computed });
+        await setOurPayment(loanId, key, {
+          calc: calc.id,
+          payment: computed,
+          balance: lib.balance,
+          ts: Date.now()
+        });
+        updated.push({ lib: lib, payment: computed, recalculated: !!ours, previousCalc: ours ? ours.calc : null });
       } else {
         skipped.push({
           lib: lib,
@@ -963,7 +1020,7 @@
       }
     }
 
-    showStudentLoanSummary({ calc: calc, detected: detected, updated: updated, skipped: skipped });
+    showStudentLoanSummary({ calc: calc, detected: detected, updated: updated, skipped: skipped, loanId: loanId });
   }
 
   function showStudentLoanSummary(results) {
@@ -1024,7 +1081,13 @@
       addSubhead('Updated');
       for (const u of results.updated) {
         const who = u.lib.borrower ? ' — ' + u.lib.borrower : '';
-        addLine(u.lib.payee + who, fmt(u.payment));
+        let tag = '';
+        if (u.recalculated) {
+          tag = u.previousCalc && u.previousCalc !== results.calc.id
+            ? ' (recalculated, was ' + u.previousCalc + ')'
+            : ' (recalculated)';
+        }
+        addLine(u.lib.payee + who + tag, fmt(u.payment));
       }
     }
     if (results.skipped.length > 0) {

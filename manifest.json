@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
   "name": "VA Residual Income Calculator",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Adds Run Residual Income Calc and Calc Student Loans buttons to the Zillow Home Loans operator portal.",
+  "permissions": ["storage"],
   "content_scripts": [
     {
       "matches": [
