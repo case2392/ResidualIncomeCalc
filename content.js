@@ -189,7 +189,8 @@
 
     const residual = grossIncome - fedTax - fica - stateTax - monthlyDebts - piti - maintenance;
 
-    const married = /married/.test(getMaritalStatus());
+    const maritalStatus = getMaritalStatus();
+    const married = /^(married|separated)$/.test(maritalStatus);
     const familySize = 1 + (married ? 1 : 0) + getDependentCount();
     const state = getPropertyState();
     const region = regionFor(state);
@@ -229,22 +230,66 @@
     input.dispatchEvent(new Event('blur', { bubbles: true }));
   }
 
-  function showToast(message, opts) {
+  function showResultPanel(title, rows, opts) {
     opts = opts || {};
-    const existing = document.querySelector('.rric-toast');
+    const existing = document.querySelector('.rric-panel');
     if (existing) existing.remove();
-    const toast = document.createElement('div');
-    toast.className = 'rric-toast' + (opts.error ? ' rric-error' : '');
-    toast.textContent = message;
-    if (opts.detail) {
-      const pre = document.createElement('pre');
-      pre.textContent = opts.detail;
-      toast.appendChild(pre);
+
+    const panel = document.createElement('div');
+    panel.className = 'rric-panel' + (opts.error ? ' rric-panel-error' : '');
+
+    const header = document.createElement('div');
+    header.className = 'rric-panel-header';
+    const titleEl = document.createElement('div');
+    titleEl.className = 'rric-panel-title';
+    titleEl.textContent = title;
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'rric-panel-close';
+    closeBtn.setAttribute('aria-label', 'Close');
+    closeBtn.textContent = '×';
+    closeBtn.addEventListener('click', function () { panel.remove(); });
+    header.appendChild(titleEl);
+    header.appendChild(closeBtn);
+    panel.appendChild(header);
+
+    const body = document.createElement('div');
+    body.className = 'rric-panel-body';
+    if (typeof rows === 'string') {
+      body.textContent = rows;
+    } else if (Array.isArray(rows)) {
+      const table = document.createElement('table');
+      table.className = 'rric-panel-table';
+      for (const row of rows) {
+        const tr = document.createElement('tr');
+        if (row.divider) {
+          tr.className = 'rric-divider';
+        }
+        if (row.emphasis) {
+          tr.className = (tr.className ? tr.className + ' ' : '') + 'rric-emphasis';
+        }
+        const th = document.createElement('td');
+        th.className = 'rric-label';
+        th.textContent = row.label || '';
+        const td = document.createElement('td');
+        td.className = 'rric-value';
+        td.textContent = row.value || '';
+        tr.appendChild(th);
+        tr.appendChild(td);
+        table.appendChild(tr);
+      }
+      body.appendChild(table);
     }
-    document.body.appendChild(toast);
-    setTimeout(function () {
-      if (toast.parentElement) toast.remove();
-    }, opts.error ? 9000 : 6000);
+    panel.appendChild(body);
+
+    if (opts.footer) {
+      const footer = document.createElement('div');
+      footer.className = 'rric-panel-footer';
+      footer.textContent = opts.footer;
+      panel.appendChild(footer);
+    }
+
+    document.body.appendChild(panel);
   }
 
   function fmt(n) {
@@ -256,30 +301,36 @@
       const result = calculate();
       const target = findFieldByLabel('VA residual income');
       if (!target) {
-        showToast('Could not find the "VA residual income" field.', { error: true });
+        showResultPanel('Calculator error', 'Could not find the "VA residual income" field on the page.', { error: true });
         return;
       }
       if (!result.inputs.grossIncome) {
-        showToast('Could not read gross monthly income from Employment or sidebar. Aborting.', { error: true });
+        showResultPanel('Calculator error', 'Could not read gross monthly income from the Employment section or the sidebar. Aborting.', { error: true });
         return;
       }
       setReactInputValue(target, result.residualIncome.toFixed(2));
 
-      const detail =
-        'Gross income:        ' + fmt(result.inputs.grossIncome) + '\n' +
-        '- Federal tax (15%): ' + fmt(result.deductions.federalTax) + '\n' +
-        '- SS/Medicare (7.625%): ' + fmt(result.deductions.socialSecurityMedicare) + '\n' +
-        '- State tax (2%):    ' + fmt(result.deductions.stateTax) + '\n' +
-        '- Monthly debts:     ' + fmt(result.deductions.monthlyDebts) + '\n' +
-        '- Proposed PITI:     ' + fmt(result.deductions.proposedPITI) + '\n' +
-        '- Maint/utilities:   ' + fmt(result.deductions.maintenanceUtilities) + ' (2,500 sq ft × $0.14)\n' +
-        '= Residual income:   ' + fmt(result.residualIncome) + '\n' +
-        'Family size: ' + result.inputs.familySize + '   State: ' + (result.inputs.state || '?') + '   Region: ' + (result.inputs.region || '?');
-      showToast('Residual income: ' + fmt(result.residualIncome), { detail });
+      const rows = [
+        { label: 'Gross monthly income', value: fmt(result.inputs.grossIncome) },
+        { label: '− Federal tax (15%)', value: '−' + fmt(result.deductions.federalTax) },
+        { label: '− SS / Medicare (7.625%)', value: '−' + fmt(result.deductions.socialSecurityMedicare) },
+        { label: '− State tax (2%)', value: '−' + fmt(result.deductions.stateTax) },
+        { label: '− Monthly debts', value: '−' + fmt(result.deductions.monthlyDebts) },
+        { label: '− Proposed PITI', value: '−' + fmt(result.deductions.proposedPITI) },
+        { label: '− Maintenance & utilities', value: '−' + fmt(result.deductions.maintenanceUtilities) },
+        { label: '= Residual income', value: fmt(result.residualIncome), divider: true, emphasis: true },
+        { label: 'Family size', value: String(result.inputs.familySize), divider: true },
+        { label: 'Property state', value: result.inputs.state || '—' },
+        { label: 'VA region', value: result.inputs.region || '—' }
+      ];
+
+      showResultPanel('Residual income: ' + fmt(result.residualIncome), rows, {
+        footer: 'Maintenance & utilities = 2,500 sq ft × $0.14'
+      });
       console.log('[Residual Income Calc]', result);
     } catch (e) {
       console.error('[Residual Income Calc] error', e);
-      showToast('Calculator error: ' + e.message, { error: true });
+      showResultPanel('Calculator error', e.message, { error: true });
     }
   }
 
