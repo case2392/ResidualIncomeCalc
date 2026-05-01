@@ -3,7 +3,25 @@
 
   const BUTTON_ID = 'rric-run-button';
   const PANEL_ID = 'rric-panel';
+  const STUDENT_LOAN_BUTTON_ID = 'rric-sloan-button';
+  const STUDENT_LOAN_PICKER_ID = 'rric-sloan-picker';
+  const STUDENT_LOAN_PANEL_ID = 'rric-sloan-summary';
   const TRIGGER_VETERAN_TYPES = ['Regular military', 'National Guard or reserves'];
+
+  const STUDENT_LOAN_CALCS = [
+    { id: 'FHA', label: 'FHA',              desc: '0.5% of balance',     rate: 0.005 },
+    { id: 'DU',  label: 'DU Conventional',  desc: '1% of balance',       rate: 0.01 },
+    { id: 'LPA', label: 'LPA Conventional', desc: '0.5% of balance',     rate: 0.005 },
+    { id: 'VA',  label: 'VA',               desc: '5% of balance ÷ 12', rate: 0.05 / 12 }
+  ];
+
+  const STUDENT_LOAN_KEYWORDS = [
+    'DEPT OF ED', 'DEPT ED', 'DEPARTMENT OF ED', 'USDOE', 'US DEPT',
+    'AIDVANTAGE', 'NELNET', 'MOHELA', 'FEDLOAN', 'EDFINANCIAL',
+    'GREAT LAKES', 'SALLIE MAE', 'NAVIENT', 'MAXIMUS',
+    'ECSI', 'DEFAULT RESOLUTION', 'STUDENT LOAN', 'STUDENT AID',
+    'GRANITE STATE', 'OSLA'
+  ];
 
   const FED_TAX_RATE = 0.15;
   const FICA_RATE = 0.07625;
@@ -700,6 +718,323 @@
     anchor.appendChild(btn);
   }
 
+  function ensureStudentLoanButton() {
+    if (!document.querySelector('table[aria-label="Table for liabilities"]')) return;
+    if (document.getElementById(STUDENT_LOAN_BUTTON_ID)) return;
+    let header = null;
+    const headings = document.querySelectorAll('h1, h2, h3, h4, h5, h6');
+    for (const h of headings) {
+      if (normalizeText(h.textContent) === 'liabilities') {
+        header = h.parentElement;
+        break;
+      }
+    }
+    if (!header) return;
+    const addBtn = header.querySelector('button[data-cy="add-entity-button"]');
+    const btn = document.createElement('button');
+    btn.id = STUDENT_LOAN_BUTTON_ID;
+    btn.type = 'button';
+    btn.className = 'rric-button rric-secondary-button';
+    btn.textContent = 'Calc Student Loans';
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      showStudentLoanPicker();
+    });
+    if (addBtn) header.insertBefore(btn, addBtn);
+    else header.appendChild(btn);
+  }
+
+  function textOf(el) { return el ? (el.textContent || '').trim() : ''; }
+
+  function findLiabilityRows() {
+    const rows = [];
+    const tables = document.querySelectorAll('table[aria-label="Table for liabilities"]');
+    for (const table of tables) {
+      const headers = table.querySelectorAll('thead th');
+      const cols = {};
+      headers.forEach(function (th, i) {
+        const t = normalizeText(th.textContent);
+        if (t === 'borrower(s)' || t === 'borrowers') cols.borrower = i;
+        else if (t === 'account type') cols.accountType = i;
+        else if (t === 'company/payee' || t === 'company / payee') cols.payee = i;
+        else if (t === 'account no') cols.accountNo = i;
+        else if (t === 'unpaid balance') cols.balance = i;
+        else if (t === 'mo payment' || t === 'monthly payment') cols.payment = i;
+      });
+      for (const tr of table.querySelectorAll('tbody > tr')) {
+        if (tr.children.length < 6) continue;
+        const firstCell = tr.children[0];
+        if (!firstCell || !firstCell.querySelector('svg')) continue;
+        rows.push({
+          tr: tr,
+          borrower: textOf(tr.children[cols.borrower]),
+          accountType: textOf(tr.children[cols.accountType]),
+          payee: textOf(tr.children[cols.payee]),
+          accountNo: textOf(tr.children[cols.accountNo]),
+          balance: parseMoney(textOf(tr.children[cols.balance])),
+          paymentText: textOf(tr.children[cols.payment]),
+          payment: parseMoney(textOf(tr.children[cols.payment]))
+        });
+      }
+    }
+    return rows;
+  }
+
+  function isStudentLoanByName(payee) {
+    const upper = (payee || '').toUpperCase();
+    return STUDENT_LOAN_KEYWORDS.some(function (k) { return upper.indexOf(k) !== -1; });
+  }
+
+  function isLiabilityRowExpanded(summaryRow) {
+    const next = summaryRow.nextElementSibling;
+    return !!(next && next.querySelector('td[colspan]'));
+  }
+
+  async function toggleLiabilityRow(summaryRow, wantExpanded) {
+    const predicate = wantExpanded
+      ? function () { return isLiabilityRowExpanded(summaryRow); }
+      : function () { return !isLiabilityRowExpanded(summaryRow); };
+    if (predicate()) return true;
+    const firstCell = summaryRow.children[0];
+    const svg = firstCell ? firstCell.querySelector('svg') : null;
+    const targets = [svg, firstCell, summaryRow].filter(Boolean);
+    for (const target of targets) {
+      if (await clickAndWaitFor(target, predicate)) return true;
+    }
+    return false;
+  }
+
+  function showStudentLoanPicker() {
+    const existing = document.getElementById(STUDENT_LOAN_PICKER_ID);
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = STUDENT_LOAN_PICKER_ID;
+    overlay.className = 'rric-modal-overlay';
+    overlay.addEventListener('click', function (e) {
+      if (e.target === overlay) overlay.remove();
+    });
+
+    const panel = document.createElement('div');
+    panel.className = 'rric-panel rric-modal';
+    const fontFamily = getPageFontFamily();
+    if (fontFamily) panel.style.fontFamily = fontFamily;
+
+    const header = document.createElement('div');
+    header.className = 'rric-panel-header';
+    const title = document.createElement('div');
+    title.className = 'rric-panel-title';
+    title.textContent = 'Calculate student loan payments';
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'rric-panel-close';
+    close.setAttribute('aria-label', 'Close');
+    close.textContent = '×';
+    close.addEventListener('click', function () { overlay.remove(); });
+    header.appendChild(title);
+    header.appendChild(close);
+    panel.appendChild(header);
+
+    const body = document.createElement('div');
+    body.className = 'rric-panel-body';
+
+    const intro = document.createElement('p');
+    intro.className = 'rric-intro';
+    intro.textContent = 'Choose the loan program. We will fill the monthly payment on student-loan liabilities that have no payment listed, then save and collapse each row.';
+    body.appendChild(intro);
+
+    for (const calc of STUDENT_LOAN_CALCS) {
+      const choice = document.createElement('button');
+      choice.type = 'button';
+      choice.className = 'rric-choice-button';
+      const lbl = document.createElement('strong');
+      lbl.textContent = calc.label;
+      const desc = document.createElement('span');
+      desc.textContent = calc.desc;
+      choice.appendChild(lbl);
+      choice.appendChild(desc);
+      choice.addEventListener('click', function () {
+        overlay.remove();
+        processStudentLoans(calc).catch(function (e) {
+          console.error('[Residual Income Calc] student loan error', e);
+          alert('Student loan calc error: ' + e.message);
+        });
+      });
+      body.appendChild(choice);
+    }
+
+    panel.appendChild(body);
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+  }
+
+  async function processStudentLoans(calc) {
+    const liabilityRows = findLiabilityRows();
+    const updated = [];
+    const skipped = [];
+    let detected = 0;
+
+    for (const lib of liabilityRows) {
+      if (!isStudentLoanByName(lib.payee)) continue;
+      detected++;
+
+      if (lib.payment > 0) {
+        skipped.push({ lib: lib, reason: 'Payment already set (' + lib.paymentText + ')' });
+        continue;
+      }
+      if (!lib.balance || lib.balance <= 0) {
+        skipped.push({ lib: lib, reason: 'No unpaid balance' });
+        continue;
+      }
+
+      const expanded = await toggleLiabilityRow(lib.tr, true);
+      if (!expanded) {
+        skipped.push({ lib: lib, reason: 'Could not expand row' });
+        continue;
+      }
+
+      const editForm = lib.tr.nextElementSibling;
+      if (!editForm) {
+        skipped.push({ lib: lib, reason: 'Edit form not found after expanding' });
+        continue;
+      }
+
+      const accountTypeSelect = editForm.querySelector('select[name="type"]');
+      const typeValue = accountTypeSelect ? accountTypeSelect.value : '';
+      const confirmedStudent = typeValue === 'StudentLoan' || isStudentLoanByName(lib.payee);
+      if (!confirmedStudent) {
+        skipped.push({ lib: lib, reason: 'Account type not StudentLoan' });
+        await toggleLiabilityRow(lib.tr, false);
+        continue;
+      }
+
+      const payoff = editForm.querySelector('input[name="payoff"]');
+      if (payoff && payoff.checked) {
+        skipped.push({ lib: lib, reason: 'Payoff flag is set' });
+        await toggleLiabilityRow(lib.tr, false);
+        continue;
+      }
+      const exclude = editForm.querySelector('input[name="exclude"]');
+      if (exclude && exclude.checked) {
+        skipped.push({ lib: lib, reason: 'Exclude flag is set' });
+        await toggleLiabilityRow(lib.tr, false);
+        continue;
+      }
+
+      const paymentInput = editForm.querySelector('input[name="monthlyPayment"]');
+      if (!paymentInput) {
+        skipped.push({ lib: lib, reason: 'Monthly payment input not found' });
+        await toggleLiabilityRow(lib.tr, false);
+        continue;
+      }
+
+      const computed = Math.round(lib.balance * calc.rate * 100) / 100;
+      setReactInputValue(paymentInput, computed.toFixed(2));
+      await waitMs(60);
+
+      const saveBtn = editForm.querySelector('button[data-cy="save-liability-button"]');
+      if (!saveBtn) {
+        skipped.push({ lib: lib, reason: 'Save button not found' });
+        await toggleLiabilityRow(lib.tr, false);
+        continue;
+      }
+      simulateClick(saveBtn);
+
+      let collapsed = false;
+      for (let i = 0; i < 60; i++) {
+        await waitMs(50);
+        if (!isLiabilityRowExpanded(lib.tr)) { collapsed = true; break; }
+      }
+      if (!collapsed) {
+        await toggleLiabilityRow(lib.tr, false);
+      }
+      updated.push({ lib: lib, payment: computed });
+    }
+
+    showStudentLoanSummary({ calc: calc, detected: detected, updated: updated, skipped: skipped });
+  }
+
+  function showStudentLoanSummary(results) {
+    const existing = document.getElementById(STUDENT_LOAN_PANEL_ID);
+    if (existing) existing.remove();
+
+    const panel = document.createElement('div');
+    panel.id = STUDENT_LOAN_PANEL_ID;
+    panel.className = 'rric-panel';
+    const fontFamily = getPageFontFamily();
+    if (fontFamily) panel.style.fontFamily = fontFamily;
+
+    const header = document.createElement('div');
+    header.className = 'rric-panel-header';
+    const title = document.createElement('div');
+    title.className = 'rric-panel-title';
+    title.textContent = results.calc.label + ' student loans: ' + results.updated.length + ' updated, ' + results.skipped.length + ' skipped';
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'rric-panel-close';
+    close.setAttribute('aria-label', 'Close');
+    close.textContent = '×';
+    close.addEventListener('click', function () { panel.remove(); });
+    header.appendChild(title);
+    header.appendChild(close);
+    panel.appendChild(header);
+
+    const body = document.createElement('div');
+    body.className = 'rric-panel-body';
+
+    function addLine(label, value, opts) {
+      opts = opts || {};
+      const row = document.createElement('div');
+      row.className = 'rric-row' + (opts.divider ? ' rric-divider' : '') + (opts.muted ? ' rric-muted' : '');
+      const lbl = document.createElement('div');
+      lbl.className = 'rric-label';
+      lbl.textContent = label;
+      const val = document.createElement('div');
+      val.className = 'rric-value';
+      val.textContent = value;
+      row.appendChild(lbl);
+      row.appendChild(val);
+      body.appendChild(row);
+    }
+    function addSubhead(text) {
+      const h = document.createElement('div');
+      h.className = 'rric-subhead';
+      h.textContent = text;
+      body.appendChild(h);
+    }
+
+    addLine('Formula', results.calc.label + ' (' + results.calc.desc + ')');
+    addLine('Student loans detected', String(results.detected));
+    addLine('Updated', String(results.updated.length));
+    addLine('Skipped', String(results.skipped.length));
+
+    if (results.updated.length > 0) {
+      addSubhead('Updated');
+      for (const u of results.updated) {
+        const who = u.lib.borrower ? ' — ' + u.lib.borrower : '';
+        addLine(u.lib.payee + who, fmt(u.payment));
+      }
+    }
+    if (results.skipped.length > 0) {
+      addSubhead('Skipped');
+      for (const s of results.skipped) {
+        const who = s.lib.borrower ? ' — ' + s.lib.borrower : '';
+        addLine(s.lib.payee + who, s.reason, { muted: true });
+      }
+    }
+    if (results.detected === 0) {
+      addSubhead('No student loans found');
+      const note = document.createElement('p');
+      note.className = 'rric-intro';
+      note.textContent = 'No liability rows had a Company/Payee that matched a known student-loan servicer. If a row should have been included, tell us the servicer name so it can be added.';
+      body.appendChild(note);
+    }
+
+    panel.appendChild(body);
+    document.body.appendChild(panel);
+  }
+
   let scheduled = false;
   function schedule() {
     if (scheduled) return;
@@ -707,6 +1042,7 @@
     requestAnimationFrame(function () {
       scheduled = false;
       try { ensureButtonState(); } catch (e) { console.error('[Residual Income Calc] observer error', e); }
+      try { ensureStudentLoanButton(); } catch (e) { console.error('[Residual Income Calc] sloan observer error', e); }
     });
   }
 
