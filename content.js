@@ -42,8 +42,9 @@
   }
 
   function vaTableRequirement(familySize, region, loanAmount) {
-    if (!region || !familySize || !loanAmount) return null;
-    const table = loanAmount > 80000 ? VA_TABLE_GT_80K : VA_TABLE_LE_80K;
+    if (!region || !familySize) return null;
+    const useGt80k = !loanAmount || loanAmount > 80000;
+    const table = useGt80k ? VA_TABLE_GT_80K : VA_TABLE_LE_80K;
     const r = table[region];
     if (!r) return null;
     if (familySize <= 5) return r[Math.max(1, Math.min(familySize, 5))];
@@ -282,6 +283,30 @@
     return getPanelNumber('Monthly PITI') || getPanelNumber('PITI');
   }
 
+  function getDTI() {
+    const target = 'dti';
+    const els = document.querySelectorAll('div, span, td, th, p, dt, dd, li, label');
+    for (const el of els) {
+      const t = normalizeText(el.textContent);
+      if (t !== target) continue;
+      const sources = [];
+      let sib = el.nextElementSibling;
+      while (sib && !sib.textContent.trim()) sib = sib.nextElementSibling;
+      if (sib) sources.push(sib.textContent);
+      if (el.parentElement) {
+        sources.push(el.parentElement.textContent.replace(el.textContent, ''));
+      }
+      for (const txt of sources) {
+        const matches = txt.match(/(\d+(?:\.\d+)?)\s*%/g);
+        if (matches && matches.length) {
+          const nums = matches.map(function (m) { return parseFloat(m); });
+          return Math.max.apply(null, nums);
+        }
+      }
+    }
+    return null;
+  }
+
   function getLoanAmount() {
     return getPanelNumber('Total loan amt')
       || getPanelNumber('Base loan amt')
@@ -302,6 +327,7 @@
     const state = getPropertyState();
     const region = regionFor(state);
     const loanAmount = getLoanAmount();
+    const dti = getDTI();
     return {
       grossIncome,
       nonTaxableIncome,
@@ -312,7 +338,8 @@
       familySize,
       state,
       region,
-      loanAmount
+      loanAmount,
+      dti
     };
   }
 
@@ -329,13 +356,17 @@
       - (state.maintenance || 0)
       - (state.childcare || 0);
     const requirement = vaTableRequirement(state.familySize, state.region, state.loanAmount);
+    const dtiOver41 = state.dti != null && state.dti > 41;
+    const requirement120 = requirement != null ? Math.round(requirement * 1.2 * 100) / 100 : null;
     return {
       taxableIncome,
       federalTax: fedTax,
       fica,
       stateTax,
       residualIncome: Math.round(residual * 100) / 100,
-      requirement
+      requirement,
+      requirement120,
+      dtiOver41
     };
   }
 
@@ -408,7 +439,9 @@
     footer.className = 'rric-panel-footer';
     const note = document.createElement('div');
     note.className = 'rric-panel-note';
-    note.textContent = 'Edit the highlighted fields, then re-run.';
+    note.innerHTML =
+      '<strong>Note:</strong> VA residual income must be at least 120% of the table ' +
+      'requirement when borrower DTI is over 41%. Edit the highlighted fields, then re-run.';
     const rerun = document.createElement('button');
     rerun.type = 'button';
     rerun.className = 'rric-button rric-rerun';
@@ -499,8 +532,15 @@
       addRow('Family size', String(state.familySize), { divider: true });
       addRow('Property state', state.state || '—');
       addRow('VA region', state.region || '—');
-      addRow('Loan amount', fmt(state.loanAmount));
+      const loanLabel = state.loanAmount ? fmt(state.loanAmount) : 'Unknown — assuming > $80k';
+      addRow('Loan amount', loanLabel);
+      if (state.dti != null) {
+        addRow('DTI', state.dti.toFixed(2) + '%');
+      }
       addRow('VA table requirement', result.requirement != null ? fmt(result.requirement) : '—', { emphasis: true });
+      if (result.dtiOver41 && result.requirement120 != null) {
+        addRow('Required at 120% (DTI > 41%)', fmt(result.requirement120), { emphasis: true });
+      }
 
       applyResults(state, result);
     }

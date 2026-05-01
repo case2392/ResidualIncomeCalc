@@ -183,17 +183,23 @@
 
 .rric-panel-footer {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 16px;
   padding: 12px 22px;
   border-top: 1px solid #e5e7eb;
   background: #f9fafb;
 }
 
 .rric-panel-note {
-  font-size: 13px;
+  font-size: 12.5px;
+  line-height: 1.45;
   color: #6b7280;
+  flex: 1;
+}
+
+.rric-panel-note strong {
+  color: #92400e;
 }
 
 .rric-rerun {
