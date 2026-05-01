@@ -514,11 +514,11 @@
     const tables = document.querySelectorAll('table[aria-label="Table for employments"]');
     for (const table of tables) {
       for (const tr of table.querySelectorAll('tbody > tr')) {
+        if (tr.children.length < 8) continue;
         const firstCell = tr.children[0];
         if (!firstCell) continue;
-        if (firstCell.querySelector('svg[class*="IconChevron"]') && tr.children.length >= 8) {
-          rows.push(tr);
-        }
+        if (!firstCell.querySelector('svg')) continue;
+        rows.push(tr);
       }
     }
     return rows;
