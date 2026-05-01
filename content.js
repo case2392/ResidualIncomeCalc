@@ -227,14 +227,16 @@
     return /va\s*(compensation|disability)/i.test(source || '');
   }
 
-  function detectVACompensation() {
+  function getDisplayedVACompensation() {
     let total = 0;
     for (const row of readOtherIncomeRows()) {
-      if (isVACompensationSource(row.source)) {
-        total += row.monthly;
-      }
+      if (isVACompensationSource(row.source)) total += row.monthly;
     }
-    return total / BLEND_VA_GROSSUP_FACTOR;
+    return total;
+  }
+
+  function detectVACompensation() {
+    return getDisplayedVACompensation() / BLEND_VA_GROSSUP_FACTOR;
   }
 
   function getOtherIncomeTotal() {
@@ -250,11 +252,13 @@
   }
 
   function getGrossMonthlyIncome() {
-    const employment = getEmploymentIncome();
-    const other = getOtherIncomeTotal();
-    const direct = employment + other;
-    if (direct > 0) return direct;
-    return getPanelNumber('Monthly income');
+    const panel = getPanelNumber('Monthly income');
+    if (panel > 0) {
+      const vaDisplayed = getDisplayedVACompensation();
+      const vaOriginal = vaDisplayed / BLEND_VA_GROSSUP_FACTOR;
+      return panel - (vaDisplayed - vaOriginal);
+    }
+    return getEmploymentIncome() + getOtherIncomeTotal();
   }
 
   function getMonthlyDebts() {
