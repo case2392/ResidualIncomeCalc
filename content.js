@@ -291,6 +291,7 @@
       monthlyDebts,
       piti,
       maintenance: MAINT_PER_SQFT * DEFAULT_SQFT,
+      childcare: 0,
       familySize,
       state,
       region,
@@ -309,7 +310,8 @@
       - fedTax - fica - stateTax
       - (state.monthlyDebts || 0)
       - (state.piti || 0)
-      - (state.maintenance || 0);
+      - (state.maintenance || 0)
+      - (state.childcare || 0);
     const requirement = vaTableRequirement(state.familySize, state.region, state.loanAmount);
     return {
       grossUp,
@@ -477,6 +479,9 @@
       addRow('− Proposed PITI', '−' + fmt(state.piti));
       addEditableRow('− Maintenance & utilities', state.maintenance, '2,500 sq ft × $0.14 default', function (v) {
         state.maintenance = v;
+      });
+      addEditableRow('− Childcare / daycare', state.childcare, 'Defaults to $0', function (v) {
+        state.childcare = v;
       });
       addRow('= Residual income', fmt(result.residualIncome), { divider: true, emphasis: true });
 
