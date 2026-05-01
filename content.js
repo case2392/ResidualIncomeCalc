@@ -531,12 +531,31 @@
 
   function simulateClick(el) {
     if (!el) return;
-    if (typeof el.click === 'function') {
-      try { el.click(); return; } catch (_) { /* fall through */ }
+    let rect;
+    try { rect = el.getBoundingClientRect(); }
+    catch (_) { rect = { left: 0, top: 0, width: 0, height: 0 }; }
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const mouseOpts = {
+      bubbles: true, cancelable: true, view: window, button: 0,
+      clientX: cx, clientY: cy
+    };
+    const pointerOpts = Object.assign({}, mouseOpts, {
+      pointerType: 'mouse', isPrimary: true, pointerId: 1, buttons: 1
+    });
+    function fire(name, Cls, opts) {
+      try { el.dispatchEvent(new Cls(name, opts)); return; }
+      catch (_) { /* fall through */ }
+      try { el.dispatchEvent(new Event(name, { bubbles: true, cancelable: true })); }
+      catch (__) { /* give up on this event */ }
     }
-    el.dispatchEvent(new MouseEvent('click', {
-      bubbles: true, cancelable: true, view: window, button: 0
-    }));
+    const hasPointer = typeof PointerEvent !== 'undefined';
+    if (hasPointer) fire('pointerover', PointerEvent, pointerOpts);
+    if (hasPointer) fire('pointerdown', PointerEvent, pointerOpts);
+    fire('mousedown', MouseEvent, mouseOpts);
+    if (hasPointer) fire('pointerup', PointerEvent, pointerOpts);
+    fire('mouseup', MouseEvent, mouseOpts);
+    fire('click', MouseEvent, mouseOpts);
   }
 
   function waitMs(ms) {
@@ -560,7 +579,8 @@
       : function () { return !isEmploymentRowExpanded(summaryRow); };
     if (predicate()) return true;
     const firstCell = summaryRow.children[0];
-    const targets = [firstCell, summaryRow].filter(Boolean);
+    const svg = firstCell ? firstCell.querySelector('svg') : null;
+    const targets = [svg, firstCell, summaryRow].filter(Boolean);
     for (const target of targets) {
       if (await clickAndWaitFor(target, predicate)) return true;
     }
