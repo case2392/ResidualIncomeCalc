@@ -197,9 +197,54 @@
     return 0;
   }
 
+  function readOtherIncomeRows() {
+    const rows = [];
+    const tables = document.querySelectorAll('table[aria-label="Table for other incomes"]');
+    for (const table of tables) {
+      const headers = table.querySelectorAll('thead th');
+      let srcCol = -1, moCol = -1;
+      headers.forEach(function (th, i) {
+        const t = normalizeText(th.textContent);
+        if (t === 'income source') srcCol = i;
+        if (t === 'income / mo' || t === 'income/mo') moCol = i;
+      });
+      if (srcCol < 0 || moCol < 0) continue;
+      const trs = table.querySelectorAll('tbody > tr');
+      for (const tr of trs) {
+        const cells = tr.children;
+        if (cells.length <= moCol) continue;
+        const sourceText = (cells[srcCol] && cells[srcCol].textContent || '').trim();
+        if (!sourceText) continue;
+        const monthly = parseMoney(cells[moCol] && cells[moCol].textContent);
+        rows.push({ source: sourceText, monthly: monthly });
+      }
+    }
+    return rows;
+  }
+
+  function detectVACompensation() {
+    let total = 0;
+    for (const row of readOtherIncomeRows()) {
+      if (/va\s*(compensation|disability)/i.test(row.source)) {
+        total += row.monthly;
+      }
+    }
+    return total;
+  }
+
+  function getOtherIncomeTotal() {
+    let total = 0;
+    for (const row of readOtherIncomeRows()) {
+      total += row.monthly;
+    }
+    return total;
+  }
+
   function getGrossMonthlyIncome() {
     const employment = getEmploymentIncome();
-    if (employment > 0) return employment;
+    const other = getOtherIncomeTotal();
+    const direct = employment + other;
+    if (direct > 0) return direct;
     return getPanelNumber('Monthly income');
   }
 
@@ -221,36 +266,9 @@
       || 0;
   }
 
-  function detectVACompensation() {
-    let total = 0;
-    const seen = new WeakSet();
-    const re = /(va\s+(compensation|disability)|service[\s-]connected|disability\s+(income|compensation|pension))/;
-    const elements = document.querySelectorAll('label, span, div, td, option');
-    for (const el of elements) {
-      const t = normalizeText(el.textContent);
-      if (!t || !re.test(t)) continue;
-      let row;
-      if (el.tagName === 'OPTION') {
-        if (!el.selected) continue;
-        const select = el.parentElement;
-        if (!select) continue;
-        row = select.closest('tr, li, div, section');
-      } else {
-        row = el.closest('tr, li') || el.parentElement;
-      }
-      if (!row || seen.has(row)) continue;
-      seen.add(row);
-      for (const inp of row.querySelectorAll('input')) {
-        const v = parseMoney(inp.value);
-        if (v > 0) { total += v; break; }
-      }
-    }
-    return total;
-  }
-
   function readPageInputs() {
     const grossIncome = getGrossMonthlyIncome();
-    const vaComp = 0;
+    const vaComp = detectVACompensation();
     const monthlyDebts = getMonthlyDebts();
     const piti = getProposedPITI();
     const married = /^(married|separated)$/.test(getMaritalStatus());
