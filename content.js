@@ -11,6 +11,7 @@
   const MAINT_PER_SQFT = 0.14;
   const DEFAULT_SQFT = 2500;
   const NON_TAXABLE_GROSS_UP_RATE = 0.25;
+  const BLEND_VA_GROSSUP_FACTOR = 1.25;
 
   const VA_REGION_BY_STATE = {
     Northeast: ['CT', 'ME', 'MA', 'NH', 'NJ', 'NY', 'PA', 'RI', 'VT'],
@@ -222,20 +223,28 @@
     return rows;
   }
 
+  function isVACompensationSource(source) {
+    return /va\s*(compensation|disability)/i.test(source || '');
+  }
+
   function detectVACompensation() {
     let total = 0;
     for (const row of readOtherIncomeRows()) {
-      if (/va\s*(compensation|disability)/i.test(row.source)) {
+      if (isVACompensationSource(row.source)) {
         total += row.monthly;
       }
     }
-    return total;
+    return total / BLEND_VA_GROSSUP_FACTOR;
   }
 
   function getOtherIncomeTotal() {
     let total = 0;
     for (const row of readOtherIncomeRows()) {
-      total += row.monthly;
+      if (isVACompensationSource(row.source)) {
+        total += row.monthly / BLEND_VA_GROSSUP_FACTOR;
+      } else {
+        total += row.monthly;
+      }
     }
     return total;
   }
