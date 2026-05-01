@@ -253,7 +253,7 @@
       }
       total += /annual/i.test(freq) ? amount / 12 : amount;
     }
-    return total;
+    return total / BLEND_VA_GROSSUP_FACTOR;
   }
 
   function detectNonTaxableIncome() {
