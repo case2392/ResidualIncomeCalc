@@ -509,7 +509,66 @@
     renderBody();
   }
 
+  function findEmploymentSummaryRows() {
+    const rows = [];
+    const tables = document.querySelectorAll('table[aria-label="Table for employments"]');
+    for (const table of tables) {
+      for (const tr of table.querySelectorAll('tbody > tr')) {
+        const firstCell = tr.children[0];
+        if (!firstCell) continue;
+        if (firstCell.querySelector('svg[class*="IconChevron"]') && tr.children.length >= 8) {
+          rows.push(tr);
+        }
+      }
+    }
+    return rows;
+  }
+
+  function isEmploymentRowExpanded(summaryRow) {
+    const next = summaryRow.nextElementSibling;
+    return !!(next && next.querySelector('td[colspan]'));
+  }
+
+  function expandEmploymentRow(summaryRow) {
+    if (isEmploymentRowExpanded(summaryRow)) return false;
+    const firstCell = summaryRow.children[0];
+    const targets = [
+      firstCell ? firstCell.querySelector('svg') : null,
+      firstCell,
+      summaryRow
+    ].filter(Boolean);
+    for (const t of targets) {
+      t.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      if (isEmploymentRowExpanded(summaryRow)) return true;
+    }
+    return false;
+  }
+
+  function expandAllEmploymentRows() {
+    let any = false;
+    for (const row of findEmploymentSummaryRows()) {
+      if (!isEmploymentRowExpanded(row)) {
+        if (expandEmploymentRow(row)) any = true;
+      }
+    }
+    return any;
+  }
+
   function runCalculator() {
+    try {
+      const expanded = expandAllEmploymentRows();
+      if (expanded) {
+        setTimeout(runCalculatorAfterExpand, 250);
+        return;
+      }
+      runCalculatorAfterExpand();
+    } catch (e) {
+      console.error('[Residual Income Calc] error', e);
+      alert('Calculator error: ' + e.message);
+    }
+  }
+
+  function runCalculatorAfterExpand() {
     try {
       const initialState = readPageInputs();
       if (!initialState.grossIncome) {
