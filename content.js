@@ -529,57 +529,74 @@
     return !!(next && next.querySelector('td[colspan]'));
   }
 
-  function expandEmploymentRow(summaryRow) {
-    if (isEmploymentRowExpanded(summaryRow)) return false;
-    const firstCell = summaryRow.children[0];
-    const targets = [
-      firstCell ? firstCell.querySelector('svg') : null,
-      firstCell,
-      summaryRow
-    ].filter(Boolean);
-    for (const t of targets) {
-      t.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-      if (isEmploymentRowExpanded(summaryRow)) return true;
+  function simulateClick(el) {
+    if (!el) return;
+    if (typeof el.click === 'function') {
+      try { el.click(); return; } catch (_) { /* fall through */ }
+    }
+    el.dispatchEvent(new MouseEvent('click', {
+      bubbles: true, cancelable: true, view: window, button: 0
+    }));
+  }
+
+  function waitMs(ms) {
+    return new Promise(function (r) { setTimeout(r, ms); });
+  }
+
+  async function clickAndWaitFor(target, predicate, maxMs) {
+    simulateClick(target);
+    const step = 25;
+    const max = maxMs || 500;
+    for (let elapsed = 0; elapsed < max; elapsed += step) {
+      await waitMs(step);
+      if (predicate()) return true;
     }
     return false;
   }
 
-  function expandAllEmploymentRows() {
-    let any = false;
-    for (const row of findEmploymentSummaryRows()) {
-      if (!isEmploymentRowExpanded(row)) {
-        if (expandEmploymentRow(row)) any = true;
-      }
+  async function toggleEmploymentRow(summaryRow, wantExpanded) {
+    const predicate = wantExpanded
+      ? function () { return isEmploymentRowExpanded(summaryRow); }
+      : function () { return !isEmploymentRowExpanded(summaryRow); };
+    if (predicate()) return true;
+    const firstCell = summaryRow.children[0];
+    const targets = [firstCell, summaryRow].filter(Boolean);
+    for (const target of targets) {
+      if (await clickAndWaitFor(target, predicate)) return true;
     }
-    return any;
+    return false;
   }
 
   function runCalculator() {
-    try {
-      const expanded = expandAllEmploymentRows();
-      if (expanded) {
-        setTimeout(runCalculatorAfterExpand, 250);
-        return;
-      }
-      runCalculatorAfterExpand();
-    } catch (e) {
+    runCalcAsync().catch(function (e) {
       console.error('[Residual Income Calc] error', e);
       alert('Calculator error: ' + e.message);
-    }
+    });
   }
 
-  function runCalculatorAfterExpand() {
-    try {
-      const initialState = readPageInputs();
-      if (!initialState.grossIncome) {
-        alert('Could not read gross monthly income from the Employment section or sidebar.');
-        return;
+  async function runCalcAsync() {
+    const summaryRows = findEmploymentSummaryRows();
+    const expandedByUs = [];
+    for (const row of summaryRows) {
+      if (!isEmploymentRowExpanded(row)) {
+        if (await toggleEmploymentRow(row, true)) expandedByUs.push(row);
       }
-      showPanel(initialState);
-    } catch (e) {
-      console.error('[Residual Income Calc] error', e);
-      alert('Calculator error: ' + e.message);
     }
+
+    let initialState;
+    try {
+      initialState = readPageInputs();
+    } finally {
+      for (const row of expandedByUs) {
+        await toggleEmploymentRow(row, false);
+      }
+    }
+
+    if (!initialState || !initialState.grossIncome) {
+      alert('Could not read gross monthly income from the Employment section or sidebar.');
+      return;
+    }
+    showPanel(initialState);
   }
 
   function findMilitaryCompletedRow() {

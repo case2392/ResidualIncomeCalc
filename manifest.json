@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "VA Residual Income Calculator",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Adds a 'Run Residual Income Calc' button to the Zillow Home Loans operator portal that auto-fills the VA residual income field.",
   "content_scripts": [
     {
