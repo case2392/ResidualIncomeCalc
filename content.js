@@ -242,22 +242,14 @@
   function getOtherIncomeTotal() {
     let total = 0;
     for (const row of readOtherIncomeRows()) {
-      if (isVACompensationSource(row.source)) {
-        total += row.monthly / BLEND_VA_GROSSUP_FACTOR;
-      } else {
-        total += row.monthly;
-      }
+      total += row.monthly;
     }
     return total;
   }
 
   function getGrossMonthlyIncome() {
     const panel = getPanelNumber('Monthly income');
-    if (panel > 0) {
-      const vaDisplayed = getDisplayedVACompensation();
-      const vaOriginal = vaDisplayed / BLEND_VA_GROSSUP_FACTOR;
-      return panel - (vaDisplayed - vaOriginal);
-    }
+    if (panel > 0) return panel;
     return getEmploymentIncome() + getOtherIncomeTotal();
   }
 
@@ -304,13 +296,12 @@
   }
 
   function calculate(state) {
-    const grossUp = NON_TAXABLE_GROSS_UP_RATE * (state.vaCompensation || 0);
-    const taxableIncome = Math.max(0, (state.grossIncome || 0) - (state.vaCompensation || 0) + grossUp);
-    const totalForResidual = (state.grossIncome || 0) + grossUp;
+    const gross = state.grossIncome || 0;
+    const taxableIncome = Math.max(0, gross - (state.vaCompensation || 0));
     const fedTax = taxableIncome * FED_TAX_RATE;
     const fica = taxableIncome * FICA_RATE;
     const stateTax = taxableIncome * STATE_TAX_RATE;
-    const residual = totalForResidual
+    const residual = gross
       - fedTax - fica - stateTax
       - (state.monthlyDebts || 0)
       - (state.piti || 0)
@@ -318,9 +309,7 @@
       - (state.childcare || 0);
     const requirement = vaTableRequirement(state.familySize, state.region, state.loanAmount);
     return {
-      grossUp,
       taxableIncome,
-      totalForResidual,
       federalTax: fedTax,
       fica,
       stateTax,
@@ -469,12 +458,9 @@
       title.textContent = 'Residual income: ' + fmt(result.residualIncome);
 
       addRow('Gross monthly income', fmt(state.grossIncome));
-      addEditableRow('VA Compensation (non-taxable)', state.vaCompensation, 'Excluded from taxes; grossed up 25%', function (v) {
+      addEditableRow('VA Compensation (non-taxable)', state.vaCompensation, 'Excluded from taxes', function (v) {
         state.vaCompensation = v;
       });
-      if (result.grossUp > 0) {
-        addRow('Gross-up @ 25% (taxable)', '+' + fmt(result.grossUp), { muted: true });
-      }
       addRow('Taxable income', fmt(result.taxableIncome), { divider: true });
       addRow('− Federal tax (15%)', '−' + fmt(result.federalTax));
       addRow('− SS / Medicare (7.625%)', '−' + fmt(result.fica));
